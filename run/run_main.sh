@@ -1,6 +1,6 @@
 data_mode='dev' # Options: 'dev', 'train' 
 
-data_path="./data/dev/dev.json" # UPDATE THIS WITH THE PATH TO THE TARGET DATASET
+data_path="data/dev/smaller_subset_rk.json"
 
 pipeline_nodes='keyword_extraction+entity_retrieval+context_retrieval+column_filtering+table_selection+column_selection+candidate_generation+revision+evaluation'
 checkpoint_nodes=''
@@ -21,15 +21,15 @@ checkpoint_dir=""
 entity_retieval_mode='ask_model' # Options: 'corrects', 'ask_model'
 
 context_retrieval_mode='vector_db' # Options: 'corrects', 'vector_db'
-top_k=5
+top_k=10
 
 table_selection_mode='ask_model' # Options: 'corrects', 'ask_model'
 
 column_selection_mode='ask_model' # Options: 'corrects', 'ask_model'
 
 engine1='gemini-pro'
-engine2='gpt-3.5-turbo-0125'
-engine3='gpt-4-turbo'
+engine2='gpt-4o-mini'
+engine3='gpt-4o-latest'
 engine4='claude-3-opus-20240229'
 engine5='gemini-1.5-pro-latest'
 engine6='finetuned_nl2sql'

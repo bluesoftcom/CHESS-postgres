@@ -3,7 +3,7 @@ from datasketch import MinHash, MinHashLSH
 from pathlib import Path
 from tqdm import tqdm
 import logging
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 
 from database_utils.execution import execute_sql
 
@@ -142,19 +142,24 @@ def make_lsh(unique_values: Dict[str, Dict[str, List[str]]], signature_size: int
     
     return lsh, minhashes
 
-def make_db_lsh(db_directory_path: str, **kwargs: Any) -> None:
+def make_db_lsh(db_directory_path: str, unique_values: Optional[Dict[str, Dict[str, List[str]]]] = None, **kwargs: Any) -> None:
     """
     Creates a MinHash LSH for the database and saves the results.
 
     Args:
         db_directory_path (str): The path to the database directory.
+        unique_values (Optional[Dict[str, Dict[str, List[str]]]): Pre-extracted unique values (for PostgreSQL).
         **kwargs (Any): Additional arguments for the LSH creation.
     """
     db_id = Path(db_directory_path).name
     preprocessed_path = Path(db_directory_path) / "preprocessed"
+    if preprocessed_path.exists():
+        logging.info("Preprocessing already done.")
+        return
     preprocessed_path.mkdir(exist_ok=True)
     
-    unique_values = _get_unique_values(str(Path(db_directory_path) / f"{db_id}.sqlite"))
+    if unique_values is None:
+        unique_values = _get_unique_values(str(Path(db_directory_path) / f"{db_id}.sqlite"))
     logging.info("Unique values obtained")
     
     with open(preprocessed_path / f"{db_id}_unique_values.pkl", "wb") as file:

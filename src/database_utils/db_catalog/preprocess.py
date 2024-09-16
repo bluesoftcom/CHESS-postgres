@@ -22,7 +22,9 @@ def make_db_context_vec_db(db_directory_path: str, **kwargs) -> None:
             - use_value_description (bool): Whether to include value descriptions (default is True).
     """
     db_id = Path(db_directory_path).name
-
+    logging.info(f"Creating context vector database for {db_id}")
+    vector_db_path = Path(db_directory_path) / "context_vector_db"
+    
     table_description = load_tables_description(db_directory_path, kwargs.get("use_value_description", True))
     docs = []
     
@@ -39,9 +41,6 @@ def make_db_context_vec_db(db_directory_path: str, **kwargs) -> None:
                 if column_info.get(key, '').strip():
                     docs.append(Document(page_content=column_info[key], metadata=metadata))
     
-    logging.info(f"Creating context vector database for {db_id}")
-    vector_db_path = Path(db_directory_path) / "context_vector_db"
-
     if vector_db_path.exists():
         os.system(f"rm -r {vector_db_path}")
 
