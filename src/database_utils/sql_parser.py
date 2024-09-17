@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from sqlglot import parse_one, exp
 from sqlglot.optimizer.qualify import qualify
 
+from database_utils.db_config import get_db_config
 from database_utils.execution import execute_sql
 from database_utils.db_info import get_table_all_columns, get_db_all_tables
 
@@ -19,9 +20,10 @@ def get_sql_tables(db_path: str, sql: str) -> List[str]:
     Returns:
         List[str]: List of table names involved in the SQL query.
     """
+    db_config = get_db_config()
     db_tables = get_db_all_tables(db_path)
     try:
-        parsed_tables = list(parse_one(sql, read="sqlite").find_all(exp.Table))
+        parsed_tables = list(parse_one(sql, read=db_config.db_type).find_all(exp.Table))
         correct_tables = [
             str(table.name).strip().replace('"', "").replace("`", "")
             for table in parsed_tables
@@ -74,8 +76,9 @@ def get_sql_columns_dict(db_path: str, sql: str) -> Dict[str, List[str]]:
     Returns:
         Dict[str, List[str]]: Dictionary of tables and their columns.
     """
+    db_config = get_db_config()
     sql = (
-        qualify(parse_one(sql, read="sqlite"), qualify_columns=True, validate_qualify_columns=False)
+        qualify(parse_one(sql, read=db_config.db_type), qualify_columns=True, validate_qualify_columns=False)
         if isinstance(sql, str)
         else sql
     )
@@ -126,10 +129,11 @@ def get_sql_condition_literals(db_path: str, sql: str) -> Dict[str, Dict[str, Li
     Returns:
         Dict[str, Dict[str, List[str]]]: Dictionary of tables and their columns with condition literals.
     """
+    db_config = get_db_config()
     try:
         columns_dict = get_sql_columns_dict(db_path=db_path, sql=sql)
         used_entities = {}
-        for sql_exp in parse_one(sql, read="sqlite").flatten():
+        for sql_exp in parse_one(sql, read=db_config.db_type).flatten():
             for literal in sql_exp.find_all(exp.Literal):
                 if literal == literal.parent.expression:
                     for column_exp in literal.parent.find_all(exp.Column):
@@ -145,9 +149,7 @@ def get_sql_condition_literals(db_path: str, sql: str) -> Dict[str, Dict[str, Li
                                         example = value_check
                                 if "LIKE" in str(literal.parent):
                                     example_to_search = literal.this.replace("%", "")
-                                    value_check = _check_value_exists(
-                                        db_path, table_name, column_name, example_to_search
-                                    )
+                                    value_check = _check_value_exists(db_path, table_name, column_name, example_to_search)
                                     if value_check:
                                         example_exist = True
                                         example = example_to_search
@@ -179,6 +181,13 @@ def _check_value_exists(db_path: str, table_name: str, column_name: str, value: 
     Returns:
         Optional[str]: The value if it exists, otherwise None.
     """
-    query = f"SELECT {column_name} FROM {table_name} WHERE {column_name} LIKE '%{value}%' LIMIT 1"
-    result = execute_sql(db_path, query, "one")
+    db_config = get_db_config()
+    if db_config.db_type == 'sqlite':
+        query = f"SELECT {column_name} FROM {table_name} WHERE {column_name} LIKE '%{value}%' LIMIT 1"
+    elif db_config.db_type == 'postgres':
+        query = f"SELECT {column_name} FROM {table_name} WHERE {column_name}::text LIKE '%{value}%' LIMIT 1"
+    else:
+        raise ValueError(f"Unsupported database type: {db_config.db_type}")
+    
+    result = execute_sql(db_path=db_path, query=query, fetch="one")
     return result[0] if result else None

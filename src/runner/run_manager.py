@@ -4,6 +4,7 @@ from pathlib import Path
 from multiprocessing import Pool
 from typing import List, Dict, Any, Tuple
 
+from database_utils.db_config import init_db_config
 from runner.logger import Logger
 from runner.task import Task
 from runner.database_manager import DatabaseManager
@@ -23,6 +24,23 @@ class RunManager:
         self.tasks: List[Task] = []
         self.total_number_of_tasks = 0
         self.processed_tasks = 0
+
+        self.init_db_config()
+
+    def init_db_config(self):
+        """Initialize the database configuration."""
+        if self.args.db_type == 'sqlite':
+            init_db_config(self.args.db_type, db_path=self.args.db_path)
+        elif self.args.db_type == 'postgres':
+            init_db_config(self.args.db_type,
+                           dbname=self.args.db_name,
+                           user=self.args.db_user,
+                           password=self.args.db_password,
+                           host=self.args.db_host,
+                           port=self.args.db_port)
+        else:
+            raise ValueError(f"Unsupported database type: {self.args.db_type}")
+
 
     def get_result_directory(self) -> str:
         """

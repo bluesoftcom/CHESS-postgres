@@ -1,6 +1,6 @@
 # Define variables
 db_type=postgres
-db_root_directory="./data/postgres/databases" # UPDATE THIS WITH THE PATH TO THE PARENT DIRECTORY OF THE DATABASES
+db_root_directory="./data/postgres/postgres_databases" # UPDATE THIS WITH THE PATH TO THE PARENT DIRECTORY OF THE DATABASES
 db_id="victim" # Options: all or a specific db_id
 verbose=true
 signature_size=100

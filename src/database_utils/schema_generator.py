@@ -2,8 +2,9 @@ import re
 import logging
 from typing import Dict, List, Optional
 
-from database_utils.execution import execute_sql
+from database_utils.db_config import get_db_config
 from database_utils.db_info import get_db_schema
+from database_utils.execution import execute_sql
 from database_utils.schema import DatabaseSchema, get_primary_keys
 
 class DatabaseSchemaGenerator:
@@ -42,12 +43,31 @@ class DatabaseSchemaGenerator:
             db_path (str): The path to the database file.
             database_schema (DatabaseSchema): The database schema to update.
         """
-        schema_with_primary_keys = {
-            table_name: {
-                col[1]: {"primary_key": True} for col in execute_sql(db_path, f"PRAGMA table_info(`{table_name}`)") if col[5] > 0
+
+        db_config = get_db_config()
+        if db_config.db_type == 'sqlite':
+            schema_with_primary_keys = {
+                table_name: {
+                    col[1]: {"primary_key": True} for col in execute_sql(db_path=db_path, query=f"PRAGMA table_info(`{table_name}`)") if col[5] > 0
+                }
+                for table_name in database_schema.tables.keys()
             }
-            for table_name in database_schema.tables.keys()
-        }
+        elif db_config.db_type == 'postgres':
+            schema_with_primary_keys = {}
+            for table_name in database_schema.tables.keys():
+                query = f"""
+                    SELECT a.attname
+                    FROM   pg_index i
+                    JOIN   pg_attribute a ON a.attrelid = i.indrelid
+                                        AND a.attnum = ANY(i.indkey)
+                    WHERE  i.indrelid = '{table_name}'::regclass
+                    AND    i.indisprimary;
+                """
+                primary_keys = execute_sql(query=query)
+                schema_with_primary_keys[table_name] = {pk[0]: {"primary_key": True} for pk in primary_keys}
+        else:
+            raise ValueError(f"Unsupported database type: {db_config.db_type}")
+        
         database_schema.set_columns_info(schema_with_primary_keys)
 
     @staticmethod
@@ -59,6 +79,7 @@ class DatabaseSchemaGenerator:
             db_path (str): The path to the database file.
             database_schema (DatabaseSchema): The database schema to update.
         """
+        db_config = get_db_config()
         schema_with_references = {
             table_name: {
                 column_name: {"foreign_keys": [], "referenced_by": []} for column_name in table_schema.columns.keys()
@@ -66,33 +87,70 @@ class DatabaseSchemaGenerator:
             for table_name, table_schema in database_schema.tables.items()
         }
 
-        for table_name, columns in schema_with_references.items():
-            foreign_keys_info = execute_sql(db_path, f"PRAGMA foreign_key_list(`{table_name}`)")
-            for fk in foreign_keys_info:
-                source_table = table_name
-                source_column = database_schema.get_actual_column_name(table_name, fk[3])
-                destination_table = database_schema.get_actual_table_name(fk[2])
-                destination_column = get_primary_keys(database_schema.tables[destination_table])[0] if not fk[4] else database_schema.get_actual_column_name(fk[2], fk[4])
+        if db_config.db_type == 'sqlite':
+            for table_name, _ in schema_with_references.items():
+                foreign_keys_info = execute_sql(db_path=db_path, query=f"PRAGMA foreign_key_list(`{table_name}`)")
+                for fk in foreign_keys_info:
+                    source_table = table_name
+                    source_column = database_schema.get_actual_column_name(table_name, fk[3])
+                    destination_table = database_schema.get_actual_table_name(fk[2])
+                    destination_column = get_primary_keys(database_schema.tables[destination_table])[0] if not fk[4] else database_schema.get_actual_column_name(fk[2], fk[4])
 
+                    schema_with_references[source_table][source_column]["foreign_keys"].append((destination_table, destination_column))
+                    schema_with_references[destination_table][destination_column]["referenced_by"].append((source_table, source_column))
+        elif db_config.db_type == 'postgres':
+            # query from https://stackoverflow.com/a/1152321
+            query = """
+                SELECT
+                    tc.table_name AS table_name, 
+                    kcu.column_name AS column_name, 
+                    ccu.table_name AS foreign_table_name,
+                    ccu.column_name AS foreign_column_name 
+                FROM 
+                    information_schema.table_constraints AS tc 
+                    JOIN information_schema.key_column_usage AS kcu
+                      ON tc.constraint_name = kcu.constraint_name
+                      AND tc.table_schema = kcu.table_schema
+                    JOIN information_schema.constraint_column_usage AS ccu
+                      ON ccu.constraint_name = tc.constraint_name
+                      AND ccu.table_schema = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY';
+            """
+            foreign_keys_info = execute_sql(query=query)
+            for fk in foreign_keys_info:
+                source_table, source_column, destination_table, destination_column = fk
                 schema_with_references[source_table][source_column]["foreign_keys"].append((destination_table, destination_column))
                 schema_with_references[destination_table][destination_column]["referenced_by"].append((source_table, source_column))
+        else:
+            raise ValueError(f"Unsupported database type: {db_config.db_type}")
 
         database_schema.set_columns_info(schema_with_references)
 
     @classmethod
     def _load_schema_into_cache(cls, db_id: str, db_path: str) -> None:
-        """
-        Loads database schema into cache.
-        
-        Args:
-            db_id (str): The database identifier.
-            db_path (str): The path to the database file.
-        """
+        db_config = get_db_config()
         db_schema = DatabaseSchema.from_schema_dict(get_db_schema(db_path))
-        schema_with_type = {
-            table_name: {col[1]: {"type": col[2]} for col in execute_sql(db_path, f"PRAGMA table_info(`{table_name}`)", fetch="all")}
-            for table_name in db_schema.tables.keys()
-        }
+        if db_config.db_type == 'sqlite':
+            schema_with_type = {
+                table_name: {col[1]: {"type": col[2]} for col in execute_sql(db_path=db_path, 
+                                                                             query=f"PRAGMA table_info(`{table_name}`)", fetch="all")}
+                for table_name in db_schema.tables.keys()
+            }
+        elif db_config.db_type == 'postgres':
+            query = """
+                SELECT table_name, column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public';
+            """
+            columns_info = execute_sql(query=query)
+            schema_with_type = {}
+            for table_name, column_name, data_type in columns_info:
+                if table_name not in schema_with_type:
+                    schema_with_type[table_name] = {}
+                schema_with_type[table_name][column_name] = {"type": data_type}
+        else:
+            raise ValueError(f"Unsupported database type: {db_config.db_type}")
+        
         db_schema.set_columns_info(schema_with_type)
         cls.CACHED_DB_SCHEMA[db_id] = db_schema
         cls._set_primary_keys(db_path, cls.CACHED_DB_SCHEMA[db_id])
@@ -120,14 +178,21 @@ class DatabaseSchemaGenerator:
         """
         self.schema_structure.add_info_from_schema(schema=self.schema_with_examples, field_names=["examples"])
         
+        db_config = get_db_config()
+        
         for table_name, table_schema in self.schema_structure.tables.items():
             for column_name, column_info in table_schema.columns.items():
                 if (self.add_examples and not column_info.examples) or ((column_info.type.lower()) == "date" or ("date" in column_name.lower())):
-                    example = execute_sql(db_path=self.db_path, 
-                                          sql=f"SELECT DISTINCT `{column_name}` FROM `{table_name}` WHERE `{column_name}` IS NOT NULL", 
-                                          fetch="random") 
+                    if db_config.db_type == 'sqlite':
+                        query = f"SELECT DISTINCT `{column_name}` FROM `{table_name}` WHERE `{column_name}` IS NOT NULL"
+                    elif db_config.db_type == 'postgres':
+                        query = f'SELECT DISTINCT "{column_name}" FROM "{table_name}" WHERE "{column_name}" IS NOT NULL'
+                    else:
+                        raise ValueError(f"Unsupported database type: {db_config.db_type}")
+                    
+                    example = execute_sql(db_path=self.db_path, query=query, fetch="random")
                     if example and len(str(example[0])) < 50:
-                        column_info.examples = example
+                        column_info.examples = [str(example[0])]  # Wrap the example in a list
 
     def _load_column_descriptions(self) -> None:
         """
@@ -136,18 +201,40 @@ class DatabaseSchemaGenerator:
         self.schema_structure.add_info_from_schema(self.schema_with_descriptions, field_names=["original_column_name", "column_name", "column_description", "data_format", "value_description"])
 
     def _extract_create_ddl_commands(self) -> Dict[str, str]:
-        """
-        Extracts DDL commands to create tables in the schema.
-        
-        Returns:
-            Dict[str, str]: A dictionary mapping table names to their DDL commands.
-        """
+        db_config = get_db_config()
         ddl_commands = {}
-        for table_name in self.schema_structure.tables.keys():
-            create_prompt = execute_sql(db_path=self.db_path, 
-                                        sql=f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}';", 
-                                        fetch="one")
-            ddl_commands[table_name] = create_prompt[0] if create_prompt else ""
+
+        if db_config.db_type == 'sqlite':
+            for table_name in self.schema_structure.tables.keys():
+                create_prompt = execute_sql(
+                    query=f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}';",
+                    fetch="one"
+                )
+                ddl_commands[table_name] = create_prompt[0] if create_prompt else ""
+
+        elif db_config.db_type == 'postgres':
+            for table_name in self.schema_structure.tables.keys():
+                query = f"""
+                    SELECT 'CREATE TABLE ' || c.relname || E' (\n' ||
+                    string_agg(
+                        '    ' || a.attname || ' ' || pg_catalog.format_type(a.atttypid, a.atttypmod) ||
+                        CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END,
+                        E',\n'
+                    ) || E'\n);' AS ddl
+                    FROM pg_class c
+                    JOIN pg_attribute a ON a.attrelid = c.oid
+                    JOIN pg_type t ON a.atttypid = t.oid
+                    WHERE c.relkind = 'r'  -- regular table
+                    AND c.relname = '{table_name}'
+                    AND a.attnum > 0
+                    GROUP BY c.relname;
+                """
+                create_prompt = execute_sql(query=query, fetch="one")
+                ddl_commands[table_name] = create_prompt[0] if create_prompt else ""
+
+        else:
+            raise ValueError(f"Unsupported database type: {db_config.db_type}")
+
         return ddl_commands
     
     @staticmethod

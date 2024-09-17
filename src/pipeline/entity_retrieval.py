@@ -139,7 +139,6 @@ def _get_similar_column_names(keyword: str, question: str, hint: str) -> List[Tu
         potential_column_names.extend(part.strip() for part in keyword.split())
 
     schema = DatabaseManager().get_db_schema()
-
     similar_column_names = []
     for table, columns in schema.items():
         for column in columns:

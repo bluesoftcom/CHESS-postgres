@@ -1,8 +1,8 @@
-import sqlite3
-import random
 import logging
 from typing import Any, Union, List, Dict
 from func_timeout import func_timeout, FunctionTimedOut
+
+from database_utils.db_config import get_db_config
 
 def _clean_sql(sql: str) -> str:
     """
@@ -16,13 +16,13 @@ def _clean_sql(sql: str) -> str:
     """
     return sql.replace('\n', ' ').replace('"', "'").strip("`.")
 
-def execute_sql(db_path: str, sql: str, fetch: Union[str, int] = "all") -> Any:
+def execute_sql(query: str, fetch: Union[str, int] = "all", db_path: str = None) -> Any:
     """
     Executes an SQL query on a database and fetches results.
     
     Args:
         db_path (str): The path to the database file.
-        sql (str): The SQL query to execute.
+        query (str): The SQL query to execute.
         fetch (Union[str, int]): How to fetch the results. Options are "all", "one", "random", or an integer.
         
     Returns:
@@ -32,22 +32,10 @@ def execute_sql(db_path: str, sql: str, fetch: Union[str, int] = "all") -> Any:
         Exception: If an error occurs during SQL execution.
     """
     try:
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql)
-            if fetch == "all":
-                return cursor.fetchall()
-            elif fetch == "one":
-                return cursor.fetchone()
-            elif fetch == "random":
-                samples = cursor.fetchmany(10)
-                return random.choice(samples) if samples else []
-            elif isinstance(fetch, int):
-                return cursor.fetchmany(fetch)
-            else:
-                raise ValueError("Invalid fetch argument. Must be 'all', 'one', 'random', or an integer.")
+        db_config = get_db_config()
+        return db_config.execute_query(db_path=db_path, query=query, fetch=fetch)
     except Exception as e:
-        logging.error(f"Error in execute_sql: {e}\nSQL: {sql}")
+        logging.error(f"Error in execute_sql: {e}\nSQL: {query}")
         raise e
 
 def _compare_sqls_outcomes(db_path: str, predicted_sql: str, ground_truth_sql: str) -> int:
@@ -55,7 +43,6 @@ def _compare_sqls_outcomes(db_path: str, predicted_sql: str, ground_truth_sql: s
     Compares the outcomes of two SQL queries to check for equivalence.
     
     Args:
-        db_path (str): The path to the database file.
         predicted_sql (str): The predicted SQL query.
         ground_truth_sql (str): The ground truth SQL query.
         
@@ -66,9 +53,9 @@ def _compare_sqls_outcomes(db_path: str, predicted_sql: str, ground_truth_sql: s
         Exception: If an error occurs during SQL execution.
     """
     try:
-        predicted_res = execute_sql(db_path, predicted_sql)
-        ground_truth_res = execute_sql(db_path, ground_truth_sql)
-        return int(set(predicted_res) == set(ground_truth_res))
+        predicted_res = execute_sql(db_path=db_path, query=predicted_sql)
+        ground_truth_res = execute_sql(db_path=db_path, query=ground_truth_sql)
+        return int(set(map(tuple, predicted_res)) == set(map(tuple, ground_truth_res)))
     except Exception as e:
         logging.critical(f"Error comparing SQL outcomes: {e}")
         raise e
@@ -105,7 +92,6 @@ def validate_sql_query(db_path: str, sql: str, max_returned_rows: int = 30) -> D
     Validates an SQL query by executing it and returning the result.
     
     Args:
-        db_path (str): The path to the database file.
         sql (str): The SQL query to validate.
         max_returned_rows (int): The maximum number of rows to return.
         
@@ -113,24 +99,23 @@ def validate_sql_query(db_path: str, sql: str, max_returned_rows: int = 30) -> D
         dict: A dictionary with the SQL query, result, and status.
     """
     try:
-        result = execute_sql(db_path, sql, fetch=max_returned_rows)
+        result = execute_sql(query=sql, fetch=max_returned_rows, db_path=db_path)
         return {"SQL": sql, "RESULT": result, "STATUS": "OK"}
     except Exception as e:
         logging.error(f"Error in validate_sql_query: {e}")
         return {"SQL": sql, "RESULT": str(e), "STATUS": "ERROR"}
 
-def aggregate_sqls(db_path: str, sqls: List[str]) -> str:
+def aggregate_sqls(db_path: str,  sqls: List[str]) -> str:
     """
     Aggregates multiple SQL queries by validating them and clustering based on result sets.
     
     Args:
-        db_path (str): The path to the database file.
         sqls (List[str]): A list of SQL queries to aggregate.
         
     Returns:
         str: The shortest SQL query from the largest cluster of equivalent queries.
     """
-    results = [validate_sql_query(db_path, sql) for sql in sqls]
+    results = [validate_sql_query(db_path=db_path, sql=sql) for sql in sqls]
     clusters = {}
 
     # Group queries by unique result sets

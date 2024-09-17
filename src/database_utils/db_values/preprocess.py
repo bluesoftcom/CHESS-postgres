@@ -1,11 +1,45 @@
 import pickle
+import random
+import sqlite3
 from datasketch import MinHash, MinHashLSH
 from pathlib import Path
 from tqdm import tqdm
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 
-from database_utils.execution import execute_sql
+def execute_sql(db_path: str, sql: str, fetch: Union[str, int] = "all") -> Any:
+    """
+    Executes an SQL query on a database and fetches results.
+    
+    Args:
+        db_path (str): The path to the database file.
+        sql (str): The SQL query to execute.
+        fetch (Union[str, int]): How to fetch the results. Options are "all", "one", "random", or an integer.
+        
+    Returns:
+        Any: The fetched results based on the fetch argument.
+    
+    Raises:
+        Exception: If an error occurs during SQL execution.
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            if fetch == "all":
+                return cursor.fetchall()
+            elif fetch == "one":
+                return cursor.fetchone()
+            elif fetch == "random":
+                samples = cursor.fetchmany(10)
+                return random.choice(samples) if samples else []
+            elif isinstance(fetch, int):
+                return cursor.fetchmany(fetch)
+            else:
+                raise ValueError("Invalid fetch argument. Must be 'all', 'one', 'random', or an integer.")
+    except Exception as e:
+        logging.error(f"Error in execute_sql: {e}\nSQL: {sql}")
+        raise e
 
 def _get_unique_values(db_path: str) -> Dict[str, Dict[str, List[str]]]:
     """
@@ -17,11 +51,13 @@ def _get_unique_values(db_path: str) -> Dict[str, Dict[str, List[str]]]:
     Returns:
         Dict[str, Dict[str, List[str]]]: A dictionary containing unique values for each table and column.
     """
-    table_names = [table[0] for table in execute_sql(db_path, "SELECT name FROM sqlite_master WHERE type='table';", fetch="all")]
+    table_names = [table[0] for table in execute_sql(query="SELECT name FROM sqlite_master WHERE type='table';", 
+                                                     fetch="all", 
+                                                     db_path=db_path)]
     primary_keys = []
 
     for table_name in table_names:
-        columns = execute_sql(db_path, f"PRAGMA table_info('{table_name}')", fetch="all")
+        columns = execute_sql(query=f"PRAGMA table_info('{table_name}')", fetch="all", db_path=db_path)
         for column in columns:
             if column[5] > 0:  # Check if it's a primary key
                 column_name = column[1]
@@ -33,21 +69,25 @@ def _get_unique_values(db_path: str) -> Dict[str, Dict[str, List[str]]]:
         if table_name == "sqlite_sequence":
             continue
         logging.info(f"Processing {table_name}")
-        columns = [col[1] for col in execute_sql(db_path, f"PRAGMA table_info('{table_name}')", fetch="all") if ("TEXT" in col[2] and col[1].lower() not in [c.lower() for c in primary_keys])]
+        columns = [col[1] 
+                   for col in execute_sql(query=f"PRAGMA table_info('{table_name}')", 
+                                          fetch="all",  
+                                          db_path=db_path) 
+                   if ("TEXT" in col[2] and col[1].lower() not in [c.lower() for c in primary_keys])]
         table_values: Dict[str, List[str]] = {}
         
         for column in columns:
             if any(keyword in column.lower() for keyword in ["_id", " id", "url", "email", "web", "time", "phone", "date", "address"]) or column.endswith("Id"):
                 continue
 
-            result = execute_sql(db_path, f"""
+            result = execute_sql(query=f"""
                 SELECT SUM(LENGTH(unique_values)), COUNT(unique_values)
                 FROM (
                     SELECT DISTINCT `{column}` AS unique_values
                     FROM `{table_name}`
                     WHERE `{column}` IS NOT NULL
                 ) AS subquery
-            """, fetch="one")
+            """, fetch="one", db_path=db_path)
 
             sum_of_lengths, count_distinct = result
             if sum_of_lengths is None or count_distinct == 0:
@@ -58,7 +98,7 @@ def _get_unique_values(db_path: str) -> Dict[str, Dict[str, List[str]]]:
             
             if ("name" in column.lower() and sum_of_lengths < 5000000) or (sum_of_lengths < 2000000 and average_length < 25):
                 logging.info(f"Fetching distinct values for {column}")
-                values = [str(value[0]) for value in execute_sql(db_path, f"SELECT DISTINCT `{column}` FROM `{table_name}` WHERE `{column}` IS NOT NULL", fetch="all")]
+                values = [str(value[0]) for value in execute_sql(query=f"SELECT DISTINCT `{column}` FROM `{table_name}` WHERE `{column}` IS NOT NULL", fetch="all", db_path=db_path)]
                 logging.info(f"Number of different values: {len(values)}")
                 table_values[column] = values
         

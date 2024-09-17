@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict
 
-from database_utils.execution import execute_sql
+from database_utils.db_config import get_db_config
 
 def get_db_all_tables(db_path: str) -> List[str]:
     """
@@ -13,9 +13,17 @@ def get_db_all_tables(db_path: str) -> List[str]:
     Returns:
         List[str]: A list of table names.
     """
+
     try:
-        raw_table_names = execute_sql(db_path, "SELECT name FROM sqlite_master WHERE type='table';")
-        return [table[0].replace('\"', '').replace('`', '') for table in raw_table_names if table[0] != "sqlite_sequence"]
+        db_config = get_db_config()
+        if db_config.db_type == 'sqlite':
+            raw_table_names = db_config.execute_query(query="SELECT name FROM sqlite_master WHERE type='table';", db_path=db_path)
+            return [table[0].replace('\"', '').replace('`', '') for table in raw_table_names if table[0] != "sqlite_sequence"]
+        elif db_config.db_type == 'postgres':
+            raw_table_names = db_config.execute_query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';")
+            return [table[0] for table in raw_table_names]
+        else:
+            raise ValueError(f"Unsupported database type: {db_config.db_type}")
     except Exception as e:
         logging.error(f"Error in get_db_all_tables: {e}")
         raise e
@@ -32,8 +40,20 @@ def get_table_all_columns(db_path: str, table_name: str) -> List[str]:
         List[str]: A list of column names.
     """
     try:
-        table_info_rows = execute_sql(db_path, f"PRAGMA table_info(`{table_name}`);")
-        return [row[1].replace('\"', '').replace('`', '') for row in table_info_rows]
+        db_config = get_db_config()
+        if db_config.db_type == 'sqlite':
+            table_info_rows = db_config.execute_query(query=f"PRAGMA table_info(`{table_name}`);", db_path=db_path)
+            return [row[1].replace('\"', '').replace('`', '') for row in table_info_rows]
+        elif db_config.db_type == 'postgres':
+            query = f"""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' AND table_name = '{table_name}';
+            """
+            table_info_rows = db_config.execute_query(query=query)
+            return [row[0] for row in table_info_rows]
+        else:
+            raise ValueError(f"Unsupported database type: {db_config.db_type}")
     except Exception as e:
         logging.error(f"Error in get_table_all_columns: {e}\nTable: {table_name}")
         raise e

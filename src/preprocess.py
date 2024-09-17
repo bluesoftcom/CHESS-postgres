@@ -35,10 +35,8 @@ def worker_initializer(db_id: str, args: argparse.Namespace):
         }
         connection = postgres_connect(db_config)
         unique_values = get_postgres_unique_values(connection)
-        preprocessed_path = db_directory_path / "preprocessed"
-        preprocessed_path.mkdir(parents=True, exist_ok=True)
         
-        make_db_lsh(str(preprocessed_path), 
+        make_db_lsh(db_directory_path, 
                     unique_values=unique_values,
                     signature_size=args.signature_size, 
                     n_gram=args.n_gram, 
